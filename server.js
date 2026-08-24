@@ -100,8 +100,65 @@ io.on("connection", (socket) => {
   });
 });
 
+
+// --- AUTHORIZED AUDIO STREAM ENDPOINT ---
+// This endpoint intentionally does NOT extract or bypass protected YouTube media.
+// It serves audio that you are authorized to host.
+//
+// Option A: put files in ./media/<videoId>.<ext>
+// Option B: set AUDIO_STREAM_BASE_URL to your own authorized audio host.
+// Example:
+//   AUDIO_STREAM_BASE_URL=https://your-domain.example/audio
+//
+// Then /api/stream/:videoId returns a directly playable URL.
+const path = require("path");
+const fs = require("fs");
+
+const MEDIA_DIR = path.join(__dirname, "media");
+const AUDIO_STREAM_BASE_URL = String(process.env.AUDIO_STREAM_BASE_URL || "").replace(/\/+$/, "");
+
+function safeVideoId(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+app.get("/api/stream/:videoId", (req, res) => {
+  const id = safeVideoId(req.params.videoId);
+  if (!id) return res.status(400).json({ error: "Invalid video ID." });
+
+  // Prefer an explicitly configured, authorized audio host.
+  if (AUDIO_STREAM_BASE_URL) {
+    return res.json({
+      url: `${AUDIO_STREAM_BASE_URL}/${encodeURIComponent(id)}.mp3`
+    });
+  }
+
+  // Otherwise look for locally hosted authorized audio.
+  const extensions = [".mp3", ".m4a", ".aac", ".wav", ".ogg"];
+  for (const ext of extensions) {
+    const file = path.join(MEDIA_DIR, `${id}${ext}`);
+    if (fs.existsSync(file)) {
+      return res.json({
+        url: `${req.protocol}://${req.get("host")}/media/${encodeURIComponent(id)}${ext}`
+      });
+    }
+  }
+
+  return res.status(404).json({
+    error: "No authorized audio file is available for this song.",
+    message: "Add the licensed audio to ./media or configure AUDIO_STREAM_BASE_URL."
+  });
+});
+
+app.use("/media", express.static(MEDIA_DIR, {
+  fallthrough: true,
+  setHeaders(res, filePath) {
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+  }
+}));
+
 // --- YOUTUBE MUSIC PROXY API ---
-const INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqUeR5Z8QJ9JQxQ2xW7QX5mQ8A";
+const INNERTUBE_API_KEY = process.env.INNERTUBE_API_KEY || "";
 const CLIENT_VERSION = "1.20260820.01.00";
 const SEARCH_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
 
@@ -159,6 +216,7 @@ function removeDuplicates(songs) {
 }
 
 async function innerTubeRequest(endpoint, body) {
+  if (!INNERTUBE_API_KEY) throw new Error("INNERTUBE_API_KEY is not configured.");
   const url = `https://music.youtube.com/youtubei/v1/${endpoint}?key=${INNERTUBE_API_KEY}`;
   const response = await fetch(url, {
     method: "POST",
