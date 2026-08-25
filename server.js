@@ -3,6 +3,10 @@ import cors from "cors";
 import http from "http";
 import { Server } from "socket.io";
 import { Innertube, Platform } from "youtubei.js";
+import { pipeline } from "stream";
+import { promisify } from "util";
+
+const streamPipeline = promisify(pipeline);
 
 // The fixed evaluator for youtubei.js
 Platform.shim.eval = async (data, env) => {
@@ -268,7 +272,6 @@ async function resolveFormatUrl(format) {
 }
 
 async function resolveAudio(youtube, videoId) {
-  console.log(`[STREAM] Requesting streaming data for ${videoId}`);
   const streamingData = await youtube.getStreamingData(videoId, { type: "audio", quality: "best" });
   if (!streamingData) throw new Error("No streaming data was returned.");
 
@@ -286,46 +289,51 @@ async function resolveAudio(youtube, videoId) {
   }).sort((a, b) => Number(b?.bitrate || b?.average_bitrate || 0) - Number(a?.bitrate || a?.average_bitrate || 0));
 
   const candidates = audioFormats.length ? audioFormats : formats;
-  console.log(`[STREAM] Found ${candidates.length} candidate format(s)`);
 
   for (const format of candidates) {
     const url = await resolveFormatUrl(format);
-    if (url) {
-      return {
-        url,
-        mimeType: format?.mime_type || format?.mimeType || format?.mime || null,
-        bitrate: format?.bitrate || format?.average_bitrate || null,
-        contentLength: format?.content_length || format?.contentLength || null,
-        itag: format?.itag || null,
-      };
-    }
+    if (url) return url;
   }
-  throw new Error("YouTube returned audio formats, but no playable URL could be resolved.");
+  throw new Error("No playable URL could be resolved.");
 }
 
+// PROXY STREAM ENDPOINT (Streams raw binary chunks directly to Flutter)
 app.get("/api/stream/:videoId", async (req, res) => {
   const videoId = String(req.params.videoId || "").trim();
-  if (!videoId) return res.status(400).json({ success: false, error: "Missing video ID" });
+  if (!videoId) return res.status(400).send("Missing video ID");
 
-  console.log(`[STREAM] Resolving ${videoId}`);
   try {
     const clients = await getYouTubeClients();
-    let lastError = null;
+    let audioUrl = null;
 
     for (const youtube of clients) {
       try {
-        const result = await resolveAudio(youtube, videoId);
-        console.log(`[STREAM] Successfully resolved ${videoId}`);
-        return res.json({ success: true, videoId, ...result });
-      } catch (error) {
-        lastError = error;
-        console.error("[STREAM] Client failed:", error?.message || error);
-      }
+        audioUrl = await resolveAudio(youtube, videoId);
+        if (audioUrl) break;
+      } catch (e) {}
     }
-    throw lastError || new Error("No playback client could resolve the audio.");
+
+    if (!audioUrl) return res.status(500).send("Could not resolve stream URL");
+
+    const audioRes = await fetch(audioUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Range": req.headers.range || "bytes=0-"
+      }
+    });
+
+    if (!audioRes.ok) return res.status(500).send("Failed to fetch audio stream");
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    if (audioRes.headers.get("content-length")) {
+      res.setHeader("Content-Length", audioRes.headers.get("content-length"));
+    }
+
+    //@ts-ignore
+    await streamPipeline(audioRes.body, res);
   } catch (error) {
-    console.error(`[STREAM] Failed for ${videoId}:`, error);
-    return res.status(500).json({ success: false, error: "Unable to resolve audio stream", details: error?.message || String(error), videoId });
+    console.error(`[STREAM ERROR]`, error);
+    if (!res.headersSent) res.status(500).send("Streaming failed");
   }
 });
 
