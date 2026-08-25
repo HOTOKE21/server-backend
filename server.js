@@ -37,15 +37,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-/* =========================================================
-   BASIC ROUTES
-   ========================================================= */
 app.get("/", (req, res) => res.json({ ok: true, message: "Focus Music Server is running" }));
 app.get("/health", (req, res) => res.json({ ok: true, status: "online" }));
 
-/* =========================================================
-   SOCKET.IO ROOMS
-   ========================================================= */
 const rooms = new Map();
 
 io.on("connection", (socket) => {
@@ -138,9 +132,6 @@ io.on("connection", (socket) => {
   });
 });
 
-/* =========================================================
-   YOUTUBE MUSIC SEARCH & STREAM
-   ========================================================= */
 const INNERTUBE_API_KEY = process.env.INNERTUBE_API_KEY || "";
 const CLIENT_VERSION = "1.20260820.01.00";
 const SEARCH_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
