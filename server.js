@@ -5,189 +5,118 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
-  cors: { origin: "*" }
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  pingInterval: 5000,
+  pingTimeout: 3000,
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.use(cors());
 app.use(express.json());
 
-// --- IN-MEMORY ROOMS STORE ---
+app.get("/", (_, res) => res.json({ ok: true, message: "Focus Music Server" }));
+app.get("/health", (_, res) => res.json({ ok: true, status: "online" }));
+
 const rooms = new Map();
+const suggestionCache = new Map();
 
-io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
+function generateRoomId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let id = "";
+  for (let i = 0; i < 5; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return rooms.has(id) ? generateRoomId() : id;
+}
 
-  socket.on("create-room", ({ username }, callback) => {
-    const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const room = {
-      id: roomId,
-      host: socket.id,
+function broadcastRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  io.to(roomId).emit("room-updated", Object.assign({}, room, { serverTime: Date.now() }));
+}
+
+function advanceQueue(room, direction) {
+  if (room.repeatMode === "one") {
+    room.position = 0;
+    room.isPlaying = true;
+    room.lastSyncTime = Date.now();
+    return;
+  }
+  var idx = room.queue.findIndex(function (s) { return s.id === (room.currentSong && room.currentSong.id); });
+  if (direction > 0) {
+    if (idx < room.queue.length - 1) room.currentSong = room.queue[idx + 1];
+    else if (room.repeatMode === "all") room.currentSong = room.queue[0];
+    else { room.isPlaying = false; room.currentSong = null; }
+  } else {
+    if (idx > 0) room.currentSong = room.queue[idx - 1];
+    else if (room.repeatMode === "all") room.currentSong = room.queue[room.queue.length - 1];
+  }
+  room.position = 0;
+  room.isPlaying = !!room.currentSong;
+  room.lastSyncTime = Date.now();
+}
+
+function shuffleArray(arr) {
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var temp = arr[i]; arr[i] = arr[j]; arr[j] = temp;
+  }
+}
+
+io.on("connection", function (socket) {
+  console.log("[SOCKET] Connected:", socket.id);
+
+  socket.on("create-room", function (data, callback) {
+    var username = data && data.username;
+    var roomId = generateRoomId();
+    var room = {
+      id: roomId, host: socket.id,
       users: [{ id: socket.id, name: username || "Host" }],
-      queue: [],
-      currentSong: null,
-      isPlaying: false,
+      queue: [], currentSong: null, isPlaying: false, position: 0,
+      repeatMode: "none", shuffleMode: false, autoSuggest: true,
+      lastSyncTime: Date.now(),
     };
     rooms.set(roomId, room);
     socket.join(roomId);
-    callback({ success: true, room });
+    if (callback) callback({ success: true, room: room });
   });
 
-  socket.on("join-room", ({ roomId, username }, callback) => {
-    const code = String(roomId).trim().toUpperCase();
-    const room = rooms.get(code);
-    if (!room) {
-      return callback({ success: false, message: "Room not found" });
-    }
-    room.users.push({ id: socket.id, name: username || "Guest" });
+  socket.on("join-room", function (data, callback) {
+    var code = String((data && data.roomId) || "").trim().toUpperCase();
+    var room = rooms.get(code);
+    if (!room) return callback && callback({ success: false, message: "Room not found" });
+    if (room.users.length >= 20) return callback && callback({ success: false, message: "Room full" });
+    var alreadyIn = room.users.some(function (u) { return u.id === socket.id; });
+    if (!alreadyIn) room.users.push({ id: socket.id, name: (data && data.username) || "Guest" });
     socket.join(code);
-    io.to(code).emit("room-updated", room);
-    callback({ success: true, room });
+    broadcastRoom(code);
+    if (callback) callback({ success: true, room: room });
   });
 
-  socket.on("leave-room", ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (room) {
-      room.users = room.users.filter(u => u.id !== socket.id);
-      socket.leave(roomId);
-      if (room.users.length === 0) {
-        rooms.delete(roomId);
-      } else {
-        io.to(roomId).emit("room-updated", room);
-      }
-    }
-  });
-
-  socket.on("add-to-queue", ({ roomId, song }) => {
-    const room = rooms.get(roomId);
+  socket.on("leave-room", function (data) {
+    var code = String((data && data.roomId) || "").trim().toUpperCase();
+    var room = rooms.get(code);
     if (!room) return;
-    room.queue.push(song);
-    if (!room.currentSong) {
-      room.currentSong = song;
-      room.isPlaying = true;
+    room.users = room.users.filter(function (u) { return u.id !== socket.id; });
+    socket.leave(code);
+    if (room.users.length === 0) rooms.delete(code);
+    else {
+      if (room.host === socket.id) room.host = room.users[0].id;
+      broadcastRoom(code);
     }
-    io.to(roomId).emit("room-updated", room);
   });
 
-  socket.on("playback-action", ({ roomId, action, song }) => {
-    const room = rooms.get(roomId);
+  socket.on("add-to-queue", function (data) {
+    var code = String((data && data.roomId) || "").trim().toUpperCase();
+    var room = rooms.get(code);
+    if (!room || !data || !data.song) return;
+    room.queue.push(Object.assign({}, data.song, { addedBy: socket.id }));
+    if (!room.currentSong) { room.currentSong = room.queue[0]; room.isPlaying = true; room.position = 0; }
+    broadcastRoom(code);
+  });
+
+  socket.on("playback-action", function (data) {
+    var code = String((data && data.roomId) || "").trim().toUpperCase();
+    var room = rooms.get(code);
     if (!room) return;
-
-    if (action === "play") {
-      room.isPlaying = true;
-      if (song) room.currentSong = song;
-    } else if (action === "pause") {
-      room.isPlaying = false;
-    } else if (action === "skip") {
-      room.queue.shift();
-      room.currentSong = room.queue[0] || null;
-      room.isPlaying = !!room.currentSong;
-    }
-    io.to(roomId).emit("room-updated", room);
-  });
-
-  socket.on("disconnect", () => {
-    for (const [roomId, room] of rooms.entries()) {
-      room.users = room.users.filter((u) => u.id !== socket.id);
-      if (room.users.length === 0) {
-        rooms.delete(roomId);
-      } else {
-        io.to(roomId).emit("room-updated", room);
-      }
-    }
-  });
-});
-
-// --- YOUTUBE MUSIC PROXY API ---
-const INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqUeR5Z8QJ9JQxQ2xW7QX5mQ8A";
-const CLIENT_VERSION = "1.20260820.01.00";
-const SEARCH_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
-
-function makeContext() {
-  return { client: { clientName: "WEB_REMIX", clientVersion: CLIENT_VERSION, hl: "en", gl: "IN" } };
-}
-
-function getText(value) {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (value.simpleText) return value.simpleText;
-  if (Array.isArray(value.runs)) return value.runs.map((r) => r.text || "").join("");
-  return "";
-}
-
-function getThumbnail(item) {
-  const thumbnails = item?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || item?.thumbnail?.thumbnails || [];
-  if (!thumbnails.length) return "";
-  return thumbnails[thumbnails.length - 1]?.url || "";
-}
-
-function parseSong(item) {
-  const renderer = item?.musicResponsiveListItemRenderer;
-  if (!renderer) return null;
-  const flexColumns = renderer.flexColumns || [];
-  const title = getText(flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text);
-  if (!title) return null;
-  const videoId = renderer.playlistItemData?.videoId || renderer.navigationEndpoint?.watchEndpoint?.videoId || renderer.onTap?.innertubeCommand?.watchEndpoint?.videoId || "";
-  if (!videoId) return null;
-  const artist = getText(flexColumns[1]?.musicResponsiveListItemFlexColumnRenderer?.text);
-  return { id: videoId, title, artist, thumbnail: getThumbnail(renderer), videoId };
-}
-
-function collectSongs(node, songs = []) {
-  if (!node || typeof node !== "object") return songs;
-  if (Array.isArray(node)) {
-    for (const item of node) collectSongs(item, songs);
-    return songs;
-  }
-  if (node.musicResponsiveListItemRenderer) {
-    const song = parseSong(node);
-    if (song) songs.push(song);
-  }
-  for (const key of Object.keys(node)) collectSongs(node[key], songs);
-  return songs;
-}
-
-function removeDuplicates(songs) {
-  const seen = new Set();
-  return songs.filter((song) => {
-    if (!song.id || seen.has(song.id)) return false;
-    seen.add(song.id);
-    return true;
-  });
-}
-
-async function innerTubeRequest(endpoint, body) {
-  const url = `https://music.youtube.com/youtubei/v1/${endpoint}?key=${INNERTUBE_API_KEY}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-      "Origin": "https://music.youtube.com",
-      "Referer": "https://music.youtube.com/",
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`InnerTube request failed: ${response.status} ${text}`);
-  try { return JSON.parse(text); }
-  catch (_) { throw new Error("YouTube Music returned invalid JSON."); }
-}
-
-app.get("/api/search", async (req, res) => {
-  try {
-    const query = String(req.query.q || "").trim();
-    if (!query) return res.json({ results: [] });
-    const data = await innerTubeRequest("search", { context: makeContext(), query, params: SEARCH_FILTER });
-    const songs = removeDuplicates(collectSongs(data)).slice(0, 30);
-    res.json({ results: songs });
-  } catch (error) {
-    res.status(500).json({ error: "Music search failed.", details: error.message });
-  }
-});
-
-server.listen(PORT, () => {
-  console.log(`Focus music server running at http://localhost:${PORT}`);
-});
+    room.lastSyncTime =
