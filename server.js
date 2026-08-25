@@ -10,8 +10,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+  },
 });
 
 const PORT = process.env.PORT || 3000;
@@ -20,31 +20,31 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================================================
-   BASIC
+   BASIC ROUTES
    ========================================================= */
 
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Focus Music Server is running"
+    message: "Focus Music Server is running",
   });
 });
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    status: "online"
+    status: "online",
   });
 });
 
 /* =========================================================
-   ROOMS
+   SOCKET.IO ROOMS
    ========================================================= */
 
 const rooms = new Map();
 
 io.on("connection", (socket) => {
-  console.log("[SOCKET] Connected:", socket.id);
+  console.log("[SOCKET] Client connected:", socket.id);
 
   socket.on("create-room", ({ username }, callback) => {
     const roomId = Math.random()
@@ -58,13 +58,13 @@ io.on("connection", (socket) => {
       users: [
         {
           id: socket.id,
-          name: username || "Host"
-        }
+          name: username || "Host",
+        },
       ],
       queue: [],
       currentSong: null,
       isPlaying: false,
-      position: 0
+      position: 0,
     };
 
     rooms.set(roomId, room);
@@ -72,7 +72,7 @@ io.on("connection", (socket) => {
 
     callback?.({
       success: true,
-      room
+      room,
     });
   });
 
@@ -86,15 +86,15 @@ io.on("connection", (socket) => {
     if (!room) {
       callback?.({
         success: false,
-        message: "Room not found"
+        message: "Room not found",
       });
       return;
     }
 
-    if (!room.users.some((u) => u.id === socket.id)) {
+    if (!room.users.some((user) => user.id === socket.id)) {
       room.users.push({
         id: socket.id,
-        name: username || "Guest"
+        name: username || "Guest",
       });
     }
 
@@ -104,7 +104,7 @@ io.on("connection", (socket) => {
 
     callback?.({
       success: true,
-      room
+      room,
     });
   });
 
@@ -207,7 +207,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log(
-      "[SOCKET] Disconnected:",
+      "[SOCKET] Client disconnected:",
       socket.id
     );
 
@@ -247,8 +247,8 @@ function makeContext() {
       clientName: "WEB_REMIX",
       clientVersion: CLIENT_VERSION,
       hl: "en",
-      gl: "IN"
-    }
+      gl: "IN",
+    },
   };
 }
 
@@ -286,7 +286,8 @@ function getThumbnail(item) {
   }
 
   return (
-    thumbnails[thumbnails.length - 1]?.url || ""
+    thumbnails[thumbnails.length - 1]
+      ?.url || ""
   );
 }
 
@@ -294,7 +295,9 @@ function parseSong(item) {
   const renderer =
     item?.musicResponsiveListItemRenderer;
 
-  if (!renderer) return null;
+  if (!renderer) {
+    return null;
+  }
 
   const flexColumns =
     renderer.flexColumns || [];
@@ -305,7 +308,9 @@ function parseSong(item) {
       ?.text
   );
 
-  if (!title) return null;
+  if (!title) {
+    return null;
+  }
 
   const videoId =
     renderer.playlistItemData?.videoId ||
@@ -316,7 +321,9 @@ function parseSong(item) {
       ?.watchEndpoint?.videoId ||
     "";
 
-  if (!videoId) return null;
+  if (!videoId) {
+    return null;
+  }
 
   const artist = getText(
     flexColumns[1]
@@ -329,7 +336,7 @@ function parseSong(item) {
     videoId,
     title,
     artist,
-    thumbnail: getThumbnail(renderer)
+    thumbnail: getThumbnail(renderer),
   };
 }
 
@@ -390,16 +397,23 @@ async function innerTubeRequest(
 
   const response = await fetch(url, {
     method: "POST",
+
     headers: {
       "Content-Type": "application/json",
+
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
         "AppleWebKit/537.36 " +
         "Chrome/151 Safari/537.36",
-      Origin: "https://music.youtube.com",
-      Referer: "https://music.youtube.com/"
+
+      Origin:
+        "https://music.youtube.com",
+
+      Referer:
+        "https://music.youtube.com/",
     },
-    body: JSON.stringify(body)
+
+    body: JSON.stringify(body),
   });
 
   const text = await response.text();
@@ -418,11 +432,12 @@ app.get(
   async (req, res) => {
     try {
       const query =
-        String(req.query.q || "").trim();
+        String(req.query.q || "")
+          .trim();
 
       if (!query) {
         return res.json({
-          results: []
+          results: [],
         });
       }
 
@@ -432,7 +447,7 @@ app.get(
           {
             context: makeContext(),
             query,
-            params: SEARCH_FILTER
+            params: SEARCH_FILTER,
           }
         );
 
@@ -442,27 +457,28 @@ app.get(
         ).slice(0, 30);
 
       return res.json({
-        results: songs
+        results: songs,
       });
 
     } catch (error) {
       console.error(
-        "[SEARCH]",
-        error?.message || error
+        "[SEARCH] Error:",
+        error
       );
 
       return res.status(500).json({
-        error: "Music search failed.",
+        error:
+          "Music search failed.",
         details:
           error?.message ||
-          String(error)
+          String(error),
       });
     }
   }
 );
 
 /* =========================================================
-   YOUTUBE STREAM RESOLUTION
+   YOUTUBE AUDIO RESOLUTION
    ========================================================= */
 
 let youtubePromise = null;
@@ -471,7 +487,7 @@ async function getYouTube() {
   if (!youtubePromise) {
     youtubePromise =
       Innertube.create({
-        generate_session_locally: true
+        generate_session_locally: true,
       });
   }
 
@@ -489,13 +505,17 @@ function normalizeUrl(value) {
     return null;
   }
 
-  const url = value.trim();
+  const text = value.trim();
+
+  if (!text) {
+    return null;
+  }
 
   if (
-    url.startsWith("https://") ||
-    url.startsWith("http://")
+    text.startsWith("https://") ||
+    text.startsWith("http://")
   ) {
-    return url;
+    return text;
   }
 
   return null;
@@ -513,7 +533,7 @@ async function resolveAudio(videoId) {
     await youtube.getBasicInfo(
       videoId,
       {
-        client: "WEB_REMIX"
+        client: "ANDROID_VR",
       }
     );
 
@@ -524,7 +544,9 @@ async function resolveAudio(videoId) {
     info?.playability_status?.reason || "";
 
   console.log(
-    `[STREAM] Playability ${status || "unknown"} ${reason}`
+    `[STREAM] Playability: ${
+      status || "unknown"
+    } ${reason}`
   );
 
   if (
@@ -536,17 +558,11 @@ async function resolveAudio(videoId) {
     );
   }
 
-  /*
-   * youtubei.js exposes chooseFormat() on
-   * VideoInfo and getStreamingData() is based
-   * on the same flow.
-   */
-
   const format =
     info.chooseFormat({
       type: "audio",
       quality: "best",
-      format: "any"
+      format: "any",
     });
 
   if (!format) {
@@ -555,11 +571,22 @@ async function resolveAudio(videoId) {
     );
   }
 
+  console.log(
+    `[STREAM] Selected itag=${format.itag || "unknown"} ` +
+    `mime=${format.mime_type || format.mimeType || "unknown"}`
+  );
+
   let url = null;
 
+  /*
+   * youtubei.js can expose decipher()
+   * for formats whose URL requires
+   * YouTube player signature processing.
+   */
   try {
     if (
-      typeof format.decipher === "function"
+      typeof format.decipher ===
+      "function"
     ) {
       url =
         await format.decipher(
@@ -568,14 +595,22 @@ async function resolveAudio(videoId) {
     }
   } catch (error) {
     console.error(
-      "[STREAM] decipher failed:",
-      error?.message || error
+      "[STREAM] Decipher failed:",
+      error?.message ||
+        error
     );
   }
 
+  /*
+   * Some formats already expose a
+   * complete URL.
+   */
   if (!url) {
     url =
       normalizeUrl(format.url);
+  } else {
+    url =
+      normalizeUrl(url);
   }
 
   if (!url) {
@@ -586,21 +621,26 @@ async function resolveAudio(videoId) {
 
   return {
     url,
+
     mimeType:
       format.mime_type ||
       format.mimeType ||
       null,
+
     bitrate:
       format.bitrate ||
       format.average_bitrate ||
       format.averageBitrate ||
       null,
+
     contentLength:
       format.content_length ||
       format.contentLength ||
       null,
+
     itag:
-      format.itag || null
+      format.itag ||
+      null,
   };
 }
 
@@ -609,13 +649,15 @@ app.get(
   async (req, res) => {
     const videoId =
       String(
-        req.params.videoId || ""
+        req.params.videoId ||
+          ""
       ).trim();
 
     if (!videoId) {
       return res.status(400).json({
         success: false,
-        error: "Missing video ID"
+        error:
+          "Missing video ID",
       });
     }
 
@@ -625,45 +667,59 @@ app.get(
 
     try {
       const result =
-        await resolveAudio(videoId);
+        await resolveAudio(
+          videoId
+        );
 
       console.log(
-        `[STREAM] Success ${videoId}`
+        `[STREAM] Successfully resolved ${videoId}`
       );
 
       return res.json({
         success: true,
         videoId,
-        url: result.url,
-        mimeType: result.mimeType,
-        bitrate: result.bitrate,
+
+        url:
+          result.url,
+
+        mimeType:
+          result.mimeType,
+
+        bitrate:
+          result.bitrate,
+
         contentLength:
           result.contentLength,
-        itag: result.itag
+
+        itag:
+          result.itag,
       });
 
     } catch (error) {
       console.error(
-        `[STREAM] Failed ${videoId}:`,
+        `[STREAM] Failed for ${videoId}:`,
         error?.stack ||
-        error
+          error
       );
 
       return res.status(500).json({
         success: false,
+
         error:
           "Unable to resolve audio stream",
+
         details:
           error?.message ||
           String(error),
-        videoId
+
+        videoId,
       });
     }
   }
 );
 
 /* =========================================================
-   START
+   SERVER START
    ========================================================= */
 
 server.listen(
