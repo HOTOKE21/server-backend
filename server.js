@@ -3,7 +3,6 @@ import cors from "cors";
 import http from "http";
 import { Server } from "socket.io";
 import { Innertube, Platform } from "youtubei.js";
-
 Platform.shim.eval = async (data, env) => {
   const fn = new Function(
     "env",
@@ -479,7 +478,6 @@ app.get(
       return res.json({
         results: songs,
       });
-
     } catch (error) {
       console.error(
         "[SEARCH] Error:",
@@ -527,7 +525,6 @@ async function getYouTubeClients() {
           console.log(
             "[STREAM] ANDROID_VR ready"
           );
-
         } catch (error) {
           console.error(
             "[STREAM] ANDROID_VR failed:",
@@ -554,7 +551,6 @@ async function getYouTubeClients() {
           console.log(
             "[STREAM] WEB_REMIX ready"
           );
-
         } catch (error) {
           console.error(
             "[STREAM] WEB_REMIX failed:",
@@ -597,8 +593,12 @@ function normalizeUrl(value) {
     }
 
     if (
-      text.startsWith("http://") ||
-      text.startsWith("https://")
+      text.startsWith(
+        "http://"
+      ) ||
+      text.startsWith(
+        "https://"
+      )
     ) {
       return text;
     }
@@ -752,8 +752,11 @@ async function resolveAudio(
           );
 
         return (
-          mime.startsWith("audio/") ||
-          format.type === "audio"
+          mime.startsWith(
+            "audio/"
+          ) ||
+          format.type ===
+            "audio"
         );
       })
       .sort(
@@ -775,7 +778,9 @@ async function resolveAudio(
     `[STREAM] Found ${candidates.length} candidate format(s)`
   );
 
-  for (const format of candidates) {
+  for (
+    const format of candidates
+  ) {
     const url =
       await resolveFormatUrl(
         format
@@ -784,12 +789,16 @@ async function resolveAudio(
     if (url) {
       return {
         url,
+
         mimeType:
           getMime(format),
+
         bitrate:
           getBitrate(format),
+
         contentLength:
           getLength(format),
+
         itag:
           getItag(format),
       };
@@ -861,7 +870,6 @@ app.get(
             itag:
               result.itag,
           });
-
         } catch (error) {
           lastError =
             error;
@@ -880,7 +888,6 @@ app.get(
           "No playback client could resolve the audio."
         )
       );
-
     } catch (error) {
       console.error(
         `[STREAM] Failed for ${videoId}:`,
