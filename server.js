@@ -185,20 +185,95 @@ app.get("/api/suggest", async function (req, res) {
 });
 
 var ytPromise = null;
-async function getYT() { if (!ytPromise) { var yt = require("youtubei.js"); ytPromise = yt.Innertube.create({ generate_session_locally: true }); } return ytPromise; }
+async function getYT() {
+  if (!ytPromise) {
+    var yt = require("youtubei.js");
+    ytPromise = yt.Innertube.create({ generate_session_locally: true });
+  }
+  return ytPromise;
+}
 
 async function resolveAudio(vid) {
   var yt = await getYT();
-  var info = await yt.getBasicInfo(vid, { client: "ANDROID_VR" });
-  var st = info && info.playability_status && info.playability_status.status;
-  if (st && st !== "OK") throw new Error("Playability: " + st);
-  var fmt = info.chooseFormat({ type: "audio", quality: "best", format: "any" });
-  if (!fmt) throw new Error("No audio format");
+
+  // Try getBasicInfo with different client options
+  var info = null;
+  var clients = ["ANDROID_VR", "ANDROID", "WEB", "IOS", "TV_EMBEDDED"];
+  for (var i = 0; i < clients.length; i++) {
+    try {
+      info = await yt.getBasicInfo(vid, { client: clients[i] });
+      var st = info && info.playability_status && info.playability_status.status;
+      if (st === "OK") break;
+      info = null;
+    } catch (e) { info = null; }
+  }
+
+  if (!info) throw new Error("All clients failed for video");
+
+  // Collect all formats
+  var formats = [];
+  try {
+    if (info.streaming_data) {
+      if (info.streaming_data.adaptive_formats) {
+        for (var j = 0; j < info.streaming_data.adaptive_formats.length; j++) {
+          var f = info.streaming_data.adaptive_formats[j];
+          if (f.mime_type && f.mime_type.indexOf("audio") !== -1) formats.push(f);
+        }
+      }
+      if (formats.length === 0 && info.streaming_data.formats) {
+        for (var k = 0; k < info.streaming_data.formats.length; k++) {
+          var f2 = info.streaming_data.formats[k];
+          if (f2.mime_type && f2.mime_type.indexOf("audio") !== -1) formats.push(f2);
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Also try chooseFormat
+  if (formats.length === 0) {
+    try {
+      var fmt = info.chooseFormat({ type: "audio", quality: "best" });
+      if (fmt) formats.push(fmt);
+    } catch (e) {}
+  }
+
+  if (formats.length === 0) throw new Error("No audio format found");
+
+  // Pick best bitrate
+  formats.sort(function (a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
+  var best = formats[0];
+
   var url = null;
-  try { if (typeof fmt.decipher === "function") url = await fmt.decipher(yt.session.player); } catch (e) {}
-  if (!url && fmt.url) url = typeof fmt.url === "string" ? fmt.url : null;
-  if (!url) throw new Error("No playable URL");
-  return { url: url, mimeType: fmt.mime_type || fmt.mimeType || null, bitrate: fmt.bitrate || null, itag: fmt.itag || null };
+
+  // Try to get URL directly
+  try { if (best.url) url = typeof best.url === "string" ? best.url : (best.url instanceof URL ? best.url.toString() : null); } catch (e) {}
+
+  // Try decipher
+  if (!url) {
+    try {
+      if (typeof best.decipher === "function") {
+        var deciphered = await best.decipher(yt.session.player);
+        if (deciphered) url = typeof deciphered === "string" ? deciphered : null;
+      }
+    } catch (e) {}
+  }
+
+  // Try to construct URL from signatureCipher
+  if (!url && best.signature_cipher) {
+    try {
+      var deciphered = await best.decipher(yt.session.player);
+      if (deciphered) url = typeof deciphered === "string" ? deciphered : null;
+    } catch (e) {}
+  }
+
+  if (!url) throw new Error("Could not resolve playable URL");
+
+  return {
+    url: url,
+    mimeType: best.mime_type || best.mimeType || null,
+    bitrate: best.bitrate || best.average_bitrate || null,
+    itag: best.itag || null
+  };
 }
 
 app.get("/api/stream/:videoId", async function (req, res) {
