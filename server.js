@@ -2,27 +2,7 @@ import express from "express";
 import cors from "cors";
 import http from "http";
 import { Server } from "socket.io";
-import { Innertube, Platform } from "youtubei.js";
-Platform.shim.eval = async (data, env) => {
-  const fn = new Function(
-    "env",
-    `
-    ${data.output}
-
-    return {
-      n: typeof n === "function"
-        ? n(env.n)
-        : undefined,
-
-      sig: typeof sig === "function"
-        ? sig(env.sig)
-        : undefined
-    };
-    `
-  );
-
-  return fn(env);
-};
+import { Innertube } from "youtubei.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -30,7 +10,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-  },
+    methods: ["GET", "POST"]
+  }
 });
 
 const PORT = process.env.PORT || 3000;
@@ -39,31 +20,31 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================================================
-   BASIC ROUTES
+   BASIC
    ========================================================= */
 
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Focus Music Server is running",
+    message: "Focus Music Server is running"
   });
 });
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    status: "online",
+    status: "online"
   });
 });
 
 /* =========================================================
-   SOCKET.IO ROOMS
+   ROOMS
    ========================================================= */
 
 const rooms = new Map();
 
 io.on("connection", (socket) => {
-  console.log("[SOCKET] Client connected:", socket.id);
+  console.log("[SOCKET] Connected:", socket.id);
 
   socket.on("create-room", ({ username }, callback) => {
     const roomId = Math.random()
@@ -77,13 +58,13 @@ io.on("connection", (socket) => {
       users: [
         {
           id: socket.id,
-          name: username || "Host",
-        },
+          name: username || "Host"
+        }
       ],
       queue: [],
       currentSong: null,
       isPlaying: false,
-      position: 0,
+      position: 0
     };
 
     rooms.set(roomId, room);
@@ -91,7 +72,7 @@ io.on("connection", (socket) => {
 
     callback?.({
       success: true,
-      room,
+      room
     });
   });
 
@@ -105,15 +86,15 @@ io.on("connection", (socket) => {
     if (!room) {
       callback?.({
         success: false,
-        message: "Room not found",
+        message: "Room not found"
       });
       return;
     }
 
-    if (!room.users.some((user) => user.id === socket.id)) {
+    if (!room.users.some((u) => u.id === socket.id)) {
       room.users.push({
         id: socket.id,
-        name: username || "Guest",
+        name: username || "Guest"
       });
     }
 
@@ -123,7 +104,7 @@ io.on("connection", (socket) => {
 
     callback?.({
       success: true,
-      room,
+      room
     });
   });
 
@@ -226,7 +207,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log(
-      "[SOCKET] Client disconnected:",
+      "[SOCKET] Disconnected:",
       socket.id
     );
 
@@ -266,8 +247,8 @@ function makeContext() {
       clientName: "WEB_REMIX",
       clientVersion: CLIENT_VERSION,
       hl: "en",
-      gl: "IN",
-    },
+      gl: "IN"
+    }
   };
 }
 
@@ -305,8 +286,7 @@ function getThumbnail(item) {
   }
 
   return (
-    thumbnails[thumbnails.length - 1]
-      ?.url || ""
+    thumbnails[thumbnails.length - 1]?.url || ""
   );
 }
 
@@ -314,9 +294,7 @@ function parseSong(item) {
   const renderer =
     item?.musicResponsiveListItemRenderer;
 
-  if (!renderer) {
-    return null;
-  }
+  if (!renderer) return null;
 
   const flexColumns =
     renderer.flexColumns || [];
@@ -327,9 +305,7 @@ function parseSong(item) {
       ?.text
   );
 
-  if (!title) {
-    return null;
-  }
+  if (!title) return null;
 
   const videoId =
     renderer.playlistItemData?.videoId ||
@@ -340,9 +316,7 @@ function parseSong(item) {
       ?.watchEndpoint?.videoId ||
     "";
 
-  if (!videoId) {
-    return null;
-  }
+  if (!videoId) return null;
 
   const artist = getText(
     flexColumns[1]
@@ -352,10 +326,10 @@ function parseSong(item) {
 
   return {
     id: videoId,
+    videoId,
     title,
     artist,
-    thumbnail: getThumbnail(renderer),
-    videoId,
+    thumbnail: getThumbnail(renderer)
   };
 }
 
@@ -416,23 +390,16 @@ async function innerTubeRequest(
 
   const response = await fetch(url, {
     method: "POST",
-
     headers: {
       "Content-Type": "application/json",
-
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
         "AppleWebKit/537.36 " +
         "Chrome/151 Safari/537.36",
-
-      Origin:
-        "https://music.youtube.com",
-
-      Referer:
-        "https://music.youtube.com/",
+      Origin: "https://music.youtube.com",
+      Referer: "https://music.youtube.com/"
     },
-
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   const text = await response.text();
@@ -451,12 +418,11 @@ app.get(
   async (req, res) => {
     try {
       const query =
-        String(req.query.q || "")
-          .trim();
+        String(req.query.q || "").trim();
 
       if (!query) {
         return res.json({
-          results: [],
+          results: []
         });
       }
 
@@ -466,7 +432,7 @@ app.get(
           {
             context: makeContext(),
             query,
-            params: SEARCH_FILTER,
+            params: SEARCH_FILTER
           }
         );
 
@@ -476,100 +442,40 @@ app.get(
         ).slice(0, 30);
 
       return res.json({
-        results: songs,
+        results: songs
       });
+
     } catch (error) {
       console.error(
-        "[SEARCH] Error:",
-        error
+        "[SEARCH]",
+        error?.message || error
       );
 
       return res.status(500).json({
-        error:
-          "Music search failed.",
+        error: "Music search failed.",
         details:
           error?.message ||
-          String(error),
+          String(error)
       });
     }
   }
 );
 
 /* =========================================================
-   YOUTUBE PLAYBACK
+   YOUTUBE STREAM RESOLUTION
    ========================================================= */
 
-let youtubeClientsPromise = null;
+let youtubePromise = null;
 
-async function getYouTubeClients() {
-  if (!youtubeClientsPromise) {
-    youtubeClientsPromise =
-      (async () => {
-        const clients = [];
-
-        try {
-          console.log(
-            "[STREAM] Creating ANDROID_VR client..."
-          );
-
-          clients.push(
-            await Innertube.create({
-              client_type:
-                "ANDROID_VR",
-
-              generate_session_locally:
-                true,
-            })
-          );
-
-          console.log(
-            "[STREAM] ANDROID_VR ready"
-          );
-        } catch (error) {
-          console.error(
-            "[STREAM] ANDROID_VR failed:",
-            error?.message ||
-              error
-          );
-        }
-
-        try {
-          console.log(
-            "[STREAM] Creating WEB_REMIX client..."
-          );
-
-          clients.push(
-            await Innertube.create({
-              client_type:
-                "WEB_REMIX",
-
-              generate_session_locally:
-                true,
-            })
-          );
-
-          console.log(
-            "[STREAM] WEB_REMIX ready"
-          );
-        } catch (error) {
-          console.error(
-            "[STREAM] WEB_REMIX failed:",
-            error?.message ||
-              error
-          );
-        }
-
-        if (!clients.length) {
-          throw new Error(
-            "Unable to initialize any YouTube playback client."
-          );
-        }
-
-        return clients;
-      })();
+async function getYouTube() {
+  if (!youtubePromise) {
+    youtubePromise =
+      Innertube.create({
+        generate_session_locally: true
+      });
   }
 
-  return youtubeClientsPromise;
+  return youtubePromise;
 }
 
 function normalizeUrl(value) {
@@ -579,235 +485,123 @@ function normalizeUrl(value) {
     return value.toString();
   }
 
-  if (typeof value === "string") {
-    const text =
-      value.trim();
+  if (typeof value !== "string") {
+    return null;
+  }
 
-    if (
-      !text ||
-      text === "null" ||
-      text === "{}" ||
-      text === "[object Promise]"
-    ) {
-      return null;
-    }
+  const url = value.trim();
 
-    if (
-      text.startsWith(
-        "http://"
-      ) ||
-      text.startsWith(
-        "https://"
-      )
-    ) {
-      return text;
-    }
+  if (
+    url.startsWith("https://") ||
+    url.startsWith("http://")
+  ) {
+    return url;
   }
 
   return null;
 }
 
-async function resolveFormatUrl(
-  format
-) {
-  if (!format) return null;
+async function resolveAudio(videoId) {
+  const youtube =
+    await getYouTube();
 
-  const candidates = [
-    format.url,
-    format.deciphered_url,
-    format.decipheredUrl,
-    format.original_url,
-    format.originalUrl,
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      const value =
-        await candidate;
-
-      const url =
-        normalizeUrl(value);
-
-      if (url) {
-        return url;
-      }
-    } catch (_) {
-      // Try next candidate.
-    }
-  }
-
-  return null;
-}
-
-function getMime(format) {
-  return (
-    format?.mime_type ||
-    format?.mimeType ||
-    format?.mime ||
-    null
-  );
-}
-
-function getBitrate(format) {
-  return (
-    format?.bitrate ||
-    format?.average_bitrate ||
-    format?.averageBitrate ||
-    null
-  );
-}
-
-function getLength(format) {
-  return (
-    format?.content_length ||
-    format?.contentLength ||
-    null
-  );
-}
-
-function getItag(format) {
-  return format?.itag || null;
-}
-
-async function resolveAudio(
-  youtube,
-  videoId
-) {
   console.log(
-    `[STREAM] Requesting streaming data for ${videoId}`
+    `[STREAM] getBasicInfo ${videoId}`
   );
 
-  const streamingData =
-    await youtube.getStreamingData(
+  const info =
+    await youtube.getBasicInfo(
       videoId,
       {
-        type: "audio",
-        quality: "best",
+        client: "WEB_REMIX"
       }
     );
 
-  if (!streamingData) {
-    throw new Error(
-      "No streaming data was returned."
-    );
-  }
+  const status =
+    info?.playability_status?.status;
 
-  const formats = [];
-
-  if (streamingData.format) {
-    formats.push(
-      streamingData.format
-    );
-  }
-
-  if (streamingData.audioFormat) {
-    formats.push(
-      streamingData.audioFormat
-    );
-  }
-
-  if (
-    Array.isArray(
-      streamingData.formats
-    )
-  ) {
-    formats.push(
-      ...streamingData.formats
-    );
-  }
-
-  if (
-    Array.isArray(
-      streamingData.adaptiveFormats
-    )
-  ) {
-    formats.push(
-      ...streamingData.adaptiveFormats
-    );
-  }
-
-  if (
-    Array.isArray(
-      streamingData.adaptive_formats
-    )
-  ) {
-    formats.push(
-      ...streamingData.adaptive_formats
-    );
-  }
-
-  if (!formats.length) {
-    formats.push(
-      streamingData
-    );
-  }
-
-  const audioFormats =
-    formats
-      .filter(Boolean)
-      .filter((format) => {
-        const mime =
-          String(
-            getMime(format) || ""
-          );
-
-        return (
-          mime.startsWith(
-            "audio/"
-          ) ||
-          format.type ===
-            "audio"
-        );
-      })
-      .sort(
-        (a, b) =>
-          Number(
-            getBitrate(b) || 0
-          ) -
-          Number(
-            getBitrate(a) || 0
-          )
-      );
-
-  const candidates =
-    audioFormats.length
-      ? audioFormats
-      : formats;
+  const reason =
+    info?.playability_status?.reason || "";
 
   console.log(
-    `[STREAM] Found ${candidates.length} candidate format(s)`
+    `[STREAM] Playability ${status || "unknown"} ${reason}`
   );
 
-  for (
-    const format of candidates
+  if (
+    status &&
+    status !== "OK"
   ) {
-    const url =
-      await resolveFormatUrl(
-        format
-      );
-
-    if (url) {
-      return {
-        url,
-
-        mimeType:
-          getMime(format),
-
-        bitrate:
-          getBitrate(format),
-
-        contentLength:
-          getLength(format),
-
-        itag:
-          getItag(format),
-      };
-    }
+    throw new Error(
+      `YouTube playability: ${status} ${reason}`
+    );
   }
 
-  throw new Error(
-    "YouTube returned audio formats, but no playable URL could be resolved."
-  );
+  /*
+   * youtubei.js exposes chooseFormat() on
+   * VideoInfo and getStreamingData() is based
+   * on the same flow.
+   */
+
+  const format =
+    info.chooseFormat({
+      type: "audio",
+      quality: "best",
+      format: "any"
+    });
+
+  if (!format) {
+    throw new Error(
+      "No audio format available."
+    );
+  }
+
+  let url = null;
+
+  try {
+    if (
+      typeof format.decipher === "function"
+    ) {
+      url =
+        await format.decipher(
+          youtube.session.player
+        );
+    }
+  } catch (error) {
+    console.error(
+      "[STREAM] decipher failed:",
+      error?.message || error
+    );
+  }
+
+  if (!url) {
+    url =
+      normalizeUrl(format.url);
+  }
+
+  if (!url) {
+    throw new Error(
+      "Audio format returned without a playable URL."
+    );
+  }
+
+  return {
+    url,
+    mimeType:
+      format.mime_type ||
+      format.mimeType ||
+      null,
+    bitrate:
+      format.bitrate ||
+      format.average_bitrate ||
+      format.averageBitrate ||
+      null,
+    contentLength:
+      format.content_length ||
+      format.contentLength ||
+      null,
+    itag:
+      format.itag || null
+  };
 }
 
 app.get(
@@ -815,15 +609,13 @@ app.get(
   async (req, res) => {
     const videoId =
       String(
-        req.params.videoId ||
-          ""
+        req.params.videoId || ""
       ).trim();
 
     if (!videoId) {
       return res.status(400).json({
         success: false,
-        error:
-          "Missing video ID",
+        error: "Missing video ID"
       });
     }
 
@@ -832,86 +624,46 @@ app.get(
     );
 
     try {
-      const clients =
-        await getYouTubeClients();
+      const result =
+        await resolveAudio(videoId);
 
-      let lastError = null;
-
-      for (
-        const youtube of clients
-      ) {
-        try {
-          const result =
-            await resolveAudio(
-              youtube,
-              videoId
-            );
-
-          console.log(
-            `[STREAM] Successfully resolved ${videoId}`
-          );
-
-          return res.json({
-            success: true,
-            videoId,
-
-            url:
-              result.url,
-
-            mimeType:
-              result.mimeType,
-
-            bitrate:
-              result.bitrate,
-
-            contentLength:
-              result.contentLength,
-
-            itag:
-              result.itag,
-          });
-        } catch (error) {
-          lastError =
-            error;
-
-          console.error(
-            "[STREAM] Client failed:",
-            error?.message ||
-              error
-          );
-        }
-      }
-
-      throw (
-        lastError ||
-        new Error(
-          "No playback client could resolve the audio."
-        )
+      console.log(
+        `[STREAM] Success ${videoId}`
       );
+
+      return res.json({
+        success: true,
+        videoId,
+        url: result.url,
+        mimeType: result.mimeType,
+        bitrate: result.bitrate,
+        contentLength:
+          result.contentLength,
+        itag: result.itag
+      });
+
     } catch (error) {
       console.error(
-        `[STREAM] Failed for ${videoId}:`,
+        `[STREAM] Failed ${videoId}:`,
+        error?.stack ||
         error
       );
 
       return res.status(500).json({
         success: false,
-
         error:
           "Unable to resolve audio stream",
-
         details:
           error?.message ||
           String(error),
-
-        videoId,
+        videoId
       });
     }
   }
 );
 
 /* =========================================================
-   START SERVER
+   START
    ========================================================= */
 
 server.listen(
