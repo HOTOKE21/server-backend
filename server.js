@@ -191,58 +191,137 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-app.get("/api/stream/:videoId", async (req, res) => {
-  try {
-    const videoId = String(req.params.videoId || "").trim();
-    if (!videoId) return res.status(400).json({ error: "Missing videoId." });
-
-    const data = await innerTubeRequest("player", {
-      context: {
-        client: {
-          clientName: "ANDROID_MUSIC",
-          clientVersion: "7.27.52",
-          androidSdkVersion: 30,
-          hl: "en",
-          gl: "IN",
-        },
+const STREAM_CLIENTS = [
+  {
+    name: "IOS",
+    context: {
+      client: {
+        clientName: "IOS",
+        clientVersion: "19.45.4",
+        deviceMake: "Apple",
+        deviceModel: "iPhone16,2",
+        hl: "en",
+        gl: "US",
+        osName: "iPhone",
+        osVersion: "18.2.0.22C150",
+        userAgent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
       },
-      videoId,
-    });
+    },
+  },
+  {
+    name: "ANDROID_VR",
+    context: {
+      client: {
+        clientName: "ANDROID_VR",
+        clientVersion: "1.65.10",
+        androidSdkVersion: 34,
+        hl: "en",
+        gl: "US",
+        userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 14; eureka-user Build/SQ3A.220605.009.A1) gzip",
+      },
+    },
+  },
+  {
+    name: "ANDROID_MUSIC",
+    context: {
+      client: {
+        clientName: "ANDROID_MUSIC",
+        clientVersion: "7.27.52",
+        androidSdkVersion: 30,
+        hl: "en",
+        gl: "IN",
+      },
+    },
+  },
+  {
+    name: "TVHTML5",
+    context: {
+      client: {
+        clientName: "TVHTML5",
+        clientVersion: "7.20260820.01.00",
+        hl: "en",
+        gl: "US",
+      },
+    },
+  },
+];
 
-    const formats = [
-      ...((data && data.streamingData && data.streamingData.adaptiveFormats) || []),
-      ...((data && data.streamingData && data.streamingData.formats) || []),
-    ];
-    const audioOnly = formats
-      .filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+app.get("/api/stream/:videoId", async (req, res) => {
+  const videoId = String(req.params.videoId || "").trim();
+  if (!videoId) return res.status(400).json({ error: "Missing videoId." });
 
-    if (!audioOnly.length) {
-      return res.status(404).json({
-        error: "No playable audio stream found.",
-        debug: {
-          playabilityStatus: (data && data.playabilityStatus && data.playabilityStatus.status) || null,
-          reason: (data && data.playabilityStatus && data.playabilityStatus.reason) || null,
-          totalFormats: formats.length,
-          hasCipher: formats.some((f) => f.signatureCipher || f.cipher),
-        },
+  let lastError = null;
+
+  for (const client of STREAM_CLIENTS) {
+    try {
+      console.log(`[STREAM] Trying ${client.name} for ${videoId}`);
+
+      const data = await innerTubeRequest("player", {
+        context: client.context,
+        videoId,
       });
-    }
 
-    const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(audioOnly[0].url)}`;
-    res.json({ url: proxyUrl });
-  } catch (error) {
-    res.status(500).json({ error: "Stream resolution failed.", details: error.message });
+      const status = data?.playabilityStatus?.status;
+      if (status !== "OK") {
+        const reason = data?.playabilityStatus?.reason || "unknown";
+        console.log(`[STREAM] ${client.name}: ${status} - ${reason}`);
+        lastError = `${client.name}: ${status} - ${reason}`;
+        continue;
+      }
+
+      const formats = [
+        ...((data.streamingData && data.streamingData.adaptiveFormats) || []),
+        ...((data.streamingData && data.streamingData.formats) || []),
+      ];
+
+      const audioOnly = formats
+        .filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url)
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+      if (!audioOnly.length) {
+        console.log(`[STREAM] ${client.name}: ${formats.length} formats but no audio with URL`);
+        lastError = `${client.name}: no audio formats with direct URL`;
+        continue;
+      }
+
+      console.log(`[STREAM] ${client.name}: found ${audioOnly.length} audio formats, best=${audioOnly[0].mimeType} ${audioOnly[0].bitrate}bps`);
+
+      const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(audioOnly[0].url)}&client=${encodeURIComponent(client.name)}`;
+      return res.json({ url: proxyUrl, client: client.name });
+    } catch (error) {
+      console.log(`[STREAM] ${client.name}: error - ${error.message}`);
+      lastError = `${client.name}: ${error.message}`;
+    }
   }
+
+  return res.status(404).json({
+    error: "All stream clients failed.",
+    lastError,
+  });
 });
+
+const PROXY_USER_AGENTS = {
+  IOS: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
+  ANDROID_VR: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 14; eureka-user Build/SQ3A.220605.009.A1) gzip",
+  ANDROID_MUSIC: "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US) gzip",
+  TVHTML5: "Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36",
+  DEFAULT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+};
 
 app.get("/api/proxy", async (req, res) => {
   try {
     const target = req.query.url;
     if (!target) return res.status(400).send("Missing url");
 
+    const clientName = req.query.client || "DEFAULT";
+    const userAgent = PROXY_USER_AGENTS[clientName] || PROXY_USER_AGENTS.DEFAULT;
+
     const headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+      "User-Agent": userAgent,
+      "Accept": "*/*",
+      "Accept-Encoding": "identity",
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/",
     };
     if (req.headers.range) headers.Range = req.headers.range;
 
