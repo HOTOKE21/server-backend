@@ -103,7 +103,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// --- YOUTUBE MUSIC PROXY API ---
+// --- YOUTUBE MUSIC SEARCH (InnerTube WEB_REMIX - this works) ---
 const INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqUeR5Z8QJ9JQxQ2xW7QX5mQ8A";
 const CLIENT_VERSION = "1.20260820.01.00";
 const SEARCH_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
@@ -191,153 +191,65 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-const STREAM_CLIENTS = [
-  {
-    name: "WEB_REMIX",
-    context: { client: { clientName: "WEB_REMIX", clientVersion: CLIENT_VERSION, hl: "en", gl: "IN" } },
-    endpoint: "https://music.youtube.com/youtubei/v1/player",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-      "Origin": "https://music.youtube.com",
-      "Referer": "https://music.youtube.com/",
-    },
-  },
-  {
-    name: "WEB",
-    context: { client: { clientName: "WEB", clientVersion: "2.20260820.01.00", hl: "en", gl: "IN" } },
-    endpoint: "https://www.youtube.com/youtubei/v1/player",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-      "Origin": "https://www.youtube.com",
-      "Referer": "https://www.youtube.com/",
-    },
-  },
-  {
-    name: "MWEB",
-    context: { client: { clientName: "MWEB", clientVersion: "2.20260820.01.00", hl: "en", gl: "IN" } },
-    endpoint: "https://www.youtube.com/youtubei/v1/player",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
-      "Origin": "https://www.youtube.com",
-      "Referer": "https://www.youtube.com/",
-    },
-  },
-  {
-    name: "IOS",
-    context: {
-      client: {
-        clientName: "IOS",
-        clientVersion: "19.45.4",
-        deviceMake: "Apple",
-        deviceModel: "iPhone16,2",
-        hl: "en",
-        gl: "US",
-        osName: "iPhone",
-        osVersion: "18.2.0.22C150",
-        userAgent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
-      },
-    },
-  },
+// --- STREAM RESOLUTION via Piped API (handles all YouTube auth) ---
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+  "https://api.piped.yt",
+  "https://pipedapi.in.projectsegfau.lt",
 ];
 
-async function streamRequest(endpoint, context, videoId, extraHeaders) {
-  const url = `${endpoint}?key=${INNERTUBE_API_KEY}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: extraHeaders || {
-      "Content-Type": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-      "Origin": "https://music.youtube.com",
-      "Referer": "https://music.youtube.com/",
-    },
-    body: JSON.stringify({ context, videoId }),
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Stream request failed: ${response.status} ${text.slice(0, 200)}`);
-  return JSON.parse(text);
+async function resolveViaPiped(videoId) {
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      console.log(`[STREAM] Trying Piped: ${instance} for ${videoId}`);
+      const resp = await fetch(`${instance}/streams/${videoId}`, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!resp.ok) {
+        console.log(`[STREAM] ${instance}: HTTP ${resp.status}`);
+        continue;
+      }
+      const data = await resp.json();
+      const audioStreams = (data.audioStreams || [])
+        .filter(s => s.url && s.mimeType && s.mimeType.startsWith("audio/"))
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      if (audioStreams.length > 0) {
+        console.log(`[STREAM] ${instance}: found ${audioStreams.length} audio streams, best=${audioStreams[0].mimeType} ${audioStreams[0].bitrate}bps`);
+        return audioStreams[0].url;
+      }
+      console.log(`[STREAM] ${instance}: no audio streams found`);
+    } catch (e) {
+      console.log(`[STREAM] ${instance}: ${e.message}`);
+    }
+  }
+  return null;
 }
 
 app.get("/api/stream/:videoId", async (req, res) => {
   const videoId = String(req.params.videoId || "").trim();
   if (!videoId) return res.status(400).json({ error: "Missing videoId." });
 
-  let lastError = null;
-
-  for (const client of STREAM_CLIENTS) {
-    try {
-      console.log(`[STREAM] Trying ${client.name} for ${videoId}`);
-
-      const data = await streamRequest(
-        client.endpoint || `https://music.youtube.com/youtubei/v1/player`,
-        client.context,
-        videoId,
-        client.headers,
-      );
-
-      const status = data?.playabilityStatus?.status;
-      if (status !== "OK") {
-        const reason = data?.playabilityStatus?.reason || "unknown";
-        console.log(`[STREAM] ${client.name}: ${status} - ${reason}`);
-        lastError = `${client.name}: ${status} - ${reason}`;
-        continue;
-      }
-
-      const formats = [
-        ...((data.streamingData && data.streamingData.adaptiveFormats) || []),
-        ...((data.streamingData && data.streamingData.formats) || []),
-      ];
-
-      const audioOnly = formats
-        .filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url)
-        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-
-      if (!audioOnly.length) {
-        console.log(`[STREAM] ${client.name}: ${formats.length} formats but no audio with URL`);
-        lastError = `${client.name}: no audio formats with direct URL`;
-        continue;
-      }
-
-      console.log(`[STREAM] ${client.name}: found ${audioOnly.length} audio formats, best=${audioOnly[0].mimeType} ${audioOnly[0].bitrate}bps`);
-
-      const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(audioOnly[0].url)}&client=${encodeURIComponent(client.name)}`;
-      return res.json({ url: proxyUrl, client: client.name });
-    } catch (error) {
-      console.log(`[STREAM] ${client.name}: error - ${error.message}`);
-      lastError = `${client.name}: ${error.message}`;
-    }
+  const pipedUrl = await resolveViaPiped(videoId);
+  if (pipedUrl) {
+    const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(pipedUrl)}`;
+    return res.json({ url: proxyUrl, source: "piped" });
   }
 
-  return res.status(404).json({
-    error: "All stream clients failed.",
-    lastError,
-  });
+  return res.status(404).json({ error: "Could not resolve stream from any source." });
 });
 
-const PROXY_USER_AGENTS = {
-  IOS: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
-  ANDROID_VR: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 14; eureka-user Build/SQ3A.220605.009.A1) gzip",
-  ANDROID_MUSIC: "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US) gzip",
-  TVHTML5: "Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36",
-  DEFAULT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-};
-
+// --- PROXY ---
 app.get("/api/proxy", async (req, res) => {
   try {
     const target = req.query.url;
     if (!target) return res.status(400).send("Missing url");
 
-    const clientName = req.query.client || "DEFAULT";
-    const userAgent = PROXY_USER_AGENTS[clientName] || PROXY_USER_AGENTS.DEFAULT;
-
     const headers = {
-      "User-Agent": userAgent,
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
       "Accept": "*/*",
       "Accept-Encoding": "identity",
-      "Origin": "https://www.youtube.com",
-      "Referer": "https://www.youtube.com/",
     };
     if (req.headers.range) headers.Range = req.headers.range;
 
