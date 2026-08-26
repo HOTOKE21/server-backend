@@ -218,7 +218,15 @@ app.get("/api/stream/:videoId", async (req, res) => {
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
     if (!audioOnly.length) {
-      return res.status(404).json({ error: "No playable audio stream found." });
+      return res.status(404).json({
+        error: "No playable audio stream found.",
+        debug: {
+          playabilityStatus: (data && data.playabilityStatus && data.playabilityStatus.status) || null,
+          reason: (data && data.playabilityStatus && data.playabilityStatus.reason) || null,
+          totalFormats: formats.length,
+          hasCipher: formats.some((f) => f.signatureCipher || f.cipher),
+        },
+      });
     }
 
     const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(audioOnly[0].url)}`;
