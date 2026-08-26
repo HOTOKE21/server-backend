@@ -3,7 +3,10 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 
+const { Readable } = require("stream");
+
 const app = express();
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" }
@@ -217,9 +220,39 @@ app.get("/api/stream/:videoId", async (req, res) => {
     if (!audioOnly.length) {
       return res.status(404).json({ error: "No playable audio stream found." });
     }
-    res.json({ url: audioOnly[0].url });
+
+    const proxyUrl = `${req.protocol}://${req.get("host")}/api/proxy?url=${encodeURIComponent(audioOnly[0].url)}`;
+    res.json({ url: proxyUrl });
   } catch (error) {
     res.status(500).json({ error: "Stream resolution failed.", details: error.message });
+  }
+});
+
+app.get("/api/proxy", async (req, res) => {
+  try {
+    const target = req.query.url;
+    if (!target) return res.status(400).send("Missing url");
+
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+    };
+    if (req.headers.range) headers.Range = req.headers.range;
+
+    const upstream = await fetch(target, { headers });
+
+    res.status(upstream.status);
+    const passHeaders = ["content-type", "content-length", "content-range", "accept-ranges"];
+    for (const h of passHeaders) {
+      const v = upstream.headers.get(h);
+      if (v) res.setHeader(h, v);
+    }
+
+    if (!upstream.body) {
+      return res.end();
+    }
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (error) {
+    res.status(500).json({ error: "Proxy failed.", details: error.message });
   }
 });
 
