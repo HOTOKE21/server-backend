@@ -193,6 +193,39 @@ app.get("/api/search", async (req, res) => {
 
 const STREAM_CLIENTS = [
   {
+    name: "WEB_REMIX",
+    context: { client: { clientName: "WEB_REMIX", clientVersion: CLIENT_VERSION, hl: "en", gl: "IN" } },
+    endpoint: "https://music.youtube.com/youtubei/v1/player",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+      "Origin": "https://music.youtube.com",
+      "Referer": "https://music.youtube.com/",
+    },
+  },
+  {
+    name: "WEB",
+    context: { client: { clientName: "WEB", clientVersion: "2.20260820.01.00", hl: "en", gl: "IN" } },
+    endpoint: "https://www.youtube.com/youtubei/v1/player",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/",
+    },
+  },
+  {
+    name: "MWEB",
+    context: { client: { clientName: "MWEB", clientVersion: "2.20260820.01.00", hl: "en", gl: "IN" } },
+    endpoint: "https://www.youtube.com/youtubei/v1/player",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/",
+    },
+  },
+  {
     name: "IOS",
     context: {
       client: {
@@ -208,43 +241,24 @@ const STREAM_CLIENTS = [
       },
     },
   },
-  {
-    name: "ANDROID_VR",
-    context: {
-      client: {
-        clientName: "ANDROID_VR",
-        clientVersion: "1.65.10",
-        androidSdkVersion: 34,
-        hl: "en",
-        gl: "US",
-        userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 14; eureka-user Build/SQ3A.220605.009.A1) gzip",
-      },
-    },
-  },
-  {
-    name: "ANDROID_MUSIC",
-    context: {
-      client: {
-        clientName: "ANDROID_MUSIC",
-        clientVersion: "7.27.52",
-        androidSdkVersion: 30,
-        hl: "en",
-        gl: "IN",
-      },
-    },
-  },
-  {
-    name: "TVHTML5",
-    context: {
-      client: {
-        clientName: "TVHTML5",
-        clientVersion: "7.20260820.01.00",
-        hl: "en",
-        gl: "US",
-      },
-    },
-  },
 ];
+
+async function streamRequest(endpoint, context, videoId, extraHeaders) {
+  const url = `${endpoint}?key=${INNERTUBE_API_KEY}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: extraHeaders || {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+      "Origin": "https://music.youtube.com",
+      "Referer": "https://music.youtube.com/",
+    },
+    body: JSON.stringify({ context, videoId }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Stream request failed: ${response.status} ${text.slice(0, 200)}`);
+  return JSON.parse(text);
+}
 
 app.get("/api/stream/:videoId", async (req, res) => {
   const videoId = String(req.params.videoId || "").trim();
@@ -256,10 +270,12 @@ app.get("/api/stream/:videoId", async (req, res) => {
     try {
       console.log(`[STREAM] Trying ${client.name} for ${videoId}`);
 
-      const data = await innerTubeRequest("player", {
-        context: client.context,
+      const data = await streamRequest(
+        client.endpoint || `https://music.youtube.com/youtubei/v1/player`,
+        client.context,
         videoId,
-      });
+        client.headers,
+      );
 
       const status = data?.playabilityStatus?.status;
       if (status !== "OK") {
