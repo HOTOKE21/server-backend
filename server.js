@@ -178,4 +178,51 @@ async function innerTubeRequest(endpoint, body) {
 
 app.get("/api/search", async (req, res) => {
   try {
-    const query = String(req.query.q ||
+    const query = String(req.query.q || "").trim();
+    if (!query) return res.json({ results: [] });
+    const data = await innerTubeRequest("search", { context: makeContext(), query, params: SEARCH_FILTER });
+    const songs = removeDuplicates(collectSongs(data)).slice(0, 30);
+    res.json({ results: songs });
+  } catch (error) {
+    res.status(500).json({ error: "Music search failed.", details: error.message });
+  }
+});
+
+app.get("/api/stream/:videoId", async (req, res) => {
+  try {
+    const videoId = String(req.params.videoId || "").trim();
+    if (!videoId) return res.status(400).json({ error: "Missing videoId." });
+
+    const data = await innerTubeRequest("player", {
+      context: {
+        client: {
+          clientName: "ANDROID_MUSIC",
+          clientVersion: "7.27.52",
+          androidSdkVersion: 30,
+          hl: "en",
+          gl: "IN",
+        },
+      },
+      videoId,
+    });
+
+    const formats = [
+      ...((data && data.streamingData && data.streamingData.adaptiveFormats) || []),
+      ...((data && data.streamingData && data.streamingData.formats) || []),
+    ];
+    const audioOnly = formats
+      .filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url)
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+    if (!audioOnly.length) {
+      return res.status(404).json({ error: "No playable audio stream found." });
+    }
+    res.json({ url: audioOnly[0].url });
+  } catch (error) {
+    res.status(500).json({ error: "Stream resolution failed.", details: error.message });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`Focus music server running at http://localhost:${PORT}`);
+});
